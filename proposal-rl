@@ -1,0 +1,12 @@
+Name: Using graph structures in Reinforcement Learning
+Topic: RL
+Category: research
+Contact: Alessandro Lazaric
+Assigned to: Marc Ducret and Florentin Guth
+Description: Many RL environments involve an underlying graph structure. The goal of the project is to exploit this structure in the following ways:
+  - by explicitly constructing a graph in continuous environments,
+  - by using the graph to inform exploration (e.g., using count-based methods such as [1]),
+  - by using the graph structure in function approximation (e.g., as an assumption of smoothness, using [2] and further work).
+The methods would be compared based on their performance in various graph-based environments, to see if we can leverage this structure and improve existing RL algorithms.
+[1] Alexander L. Strehl, Michael L. Littman, An analysis of model-based Interval Estimation for Markov Decision Processes (https://www.sciencedirect.com/science/article/pii/S0022000008000767)
+[2] Joan Bruna, Wojciech Zaremba, Arthur Szlam, Yann LeCun, Spectral Networks and Locally Connected Networks on Graphs (https://arxiv.org/abs/1312.6203)
