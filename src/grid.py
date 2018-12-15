@@ -22,6 +22,8 @@ class GridEnv:
         self.D = len(self.grid.shape)
         self.B = batch
         self.pos = np.repeat(self.init[None,:], self.B, axis=0) # BxD
+        self.found_intermediate = np.zeros(self.B, dtype=bool)
+        self.time = np.zeros(self.B, dtype=int)
         self.dirs = np.zeros((2*self.D, self.D), dtype=int) # AxD
         actions = np.arange(2*self.D)
         self.dirs[actions, actions//2] = 2*(actions % 2) - 1
@@ -34,7 +36,19 @@ class GridEnv:
         new_pos = self.pos + self.dirs[a]
         walkable = self.grid[tuple(new_pos.T)] != cell_wall
         self.pos[walkable] = new_pos[walkable]
-        return self.pos, walkable.astype(float) - 1, np.zeros(self.B, dtype=bool), None
+        self.found_intermediate = np.logical_or(
+            self.found_intermediate,
+            self.grid[tuple(self.pos.T)] == cell_intermediate
+        )
+        done = np.logical_and(
+            self.found_intermediate,
+            self.grid[tuple(self.pos.T)] == cell_end
+        )
+        self.time += 1
+        finish_times = self.time[done]
+        self.time[done] = 0
+        self.pos[done] = self.init
+        return self.pos, walkable.astype(float) - 1, done, finish_times
 
     def render(self):
         if self.D != 2:
@@ -55,8 +69,3 @@ def render_grid(grid):
         (grid >> 8 ) & 0xFF,
         (grid >> 0 ) & 0xFF,
     ), axis=-1))
-
-env = GridEnv(read_grid('grids/grid.png'))
-while True:
-    env.step(np.random.randint(0, env.D * 2))
-    env.render()
