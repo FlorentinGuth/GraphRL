@@ -27,31 +27,40 @@ class GridEnv:
         self.dirs = th.zeros((2*self.D, self.D), dtype=th.long) # AxD
         actions = th.arange(2*self.D)
         self.dirs[actions, actions//2] = 2*(actions % 2) - 1
+        self.obs_shape = (self.D,)
+
+    def reset(self):
+        self.pos[:] = self.init
+        return self.pos
 
     def step(self, a):
         """
         a is B array of actions
         returns observation of new state, reward, done, debug
         """
-        new_pos = self.pos + self.dirs[a]
+        new_pos = self.pos + self.dirs[a.type(th.long)]
         walkable = self.grid[tuple(new_pos.t())] != cell_wall
+        reward = walkable.to(th.float32) - 1
         self.pos[walkable] = new_pos[walkable]
         # | and & are elementwise-bitwise 'or' and 'and'
         self.found_intermediate = self.found_intermediate | (self.grid[tuple(self.pos.t())] == cell_intermediate)
         done = self.found_intermediate & (self.grid[tuple(self.pos.t())] == cell_end)
+        if done.any():
+            reward[done] += 10
         self.time += 1
         finish_times = self.time[done]
+        done = done | (self.time > 128)
         self.time[done] = 0
         if done.any():
             self.pos[done] = self.init
-        return self.pos, walkable.to(th.float32) - 1, done, finish_times
+        return self.pos - self.init, reward, done, finish_times
 
     def render(self):
         if self.D != 2:
             raise ValueError('Impossible to render non-2D')
         plt.figure()
         render_grid(self.grid)
-        y, x = self.pos.T
+        y, x = self.pos.t()
         plt.scatter(x, y, marker='x')
         plt.show()
 
