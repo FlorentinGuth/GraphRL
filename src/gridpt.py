@@ -31,6 +31,7 @@ class GridEnv:
 
     def reset(self):
         self.pos[:] = self.init
+        self.found_intermediate[:] = 0
         return self.pos
 
     def step(self, a):
@@ -47,6 +48,7 @@ class GridEnv:
         done = self.found_intermediate & (self.grid[tuple(self.pos.t())] == cell_end)
         if done.any():
             reward[done] += 10
+            self.found_intermediate[done] = 0
         self.time += 1
         finish_times = self.time[done]
         done = done | (self.time > 128)

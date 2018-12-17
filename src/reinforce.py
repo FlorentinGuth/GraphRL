@@ -4,27 +4,22 @@ import torch.nn as nn
 class Multinomial(nn.Module):
     def __init__(self, features_dim, output_dim):
         super(Multinomial, self).__init__()
+        self.output_dim = output_dim
         self.linear = nn.Linear(features_dim, output_dim)
         self.softmax = nn.Softmax(-1)
 
-    def forward(self, features):
-        return th.distributions.Categorical(self.softmax(self.linear(features)))
-
     def sample(self, features):
-        return self.softmax(self.linear(th.zeros(features.shape))).multinomial(1)
+        return self.softmax(self.linear(features)).multinomial(1)
 
     def log_prob(self, features, value):
-        return th.log(self.softmax(self.linear(th.zeros(features.shape))))[:, :, 0]
+        return th.log(self.softmax(self.linear(features))).gather(-1, value.unsqueeze(-1).type(th.LongTensor)).squeeze(-1)
 
 class Policy(nn.Module):
-    def __init__(self, feature_network, action_network):
+    def __init__(self, feature_network, action_network, value_network):
         super(Policy, self).__init__()
         self.feature_network = feature_network
         self.action_network = action_network
-
-    def forward(self, obs):
-        features = self.feature_network(obs)
-        return self.action_network(features)
+        self.value_network = value_network
 
     def sample(self, obs):
         features = self.feature_network(obs)
@@ -34,17 +29,21 @@ class Policy(nn.Module):
         features = self.feature_network(obs)
         return self.action_network.log_prob(features, value)
 
+    def value(self, obs):
+        features = self.feature_network(obs)
+        return self.value_network(features)
+
 def collect(env, policy, step_batch):
-    obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
-    act = th.zeros((step_batch, env.B), dtype=th.int)
-    rew = th.zeros((step_batch, env.B))
-    don = th.zeros((step_batch, env.B), dtype=th.int)
+    with th.no_grad():
+        obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
+        act = th.zeros((step_batch, env.B), dtype=th.int)
+        rew = th.zeros((step_batch, env.B))
+        don = th.zeros((step_batch, env.B), dtype=th.int)
 
     obs[0] = env.reset()
 
     while True:
         for t in range(step_batch):
-
             act[t] = policy.sample(obs[t]).view(-1)
             obs[t+1], rew[t], don[t], _ = env.step(act[t])
         yield obs, act, rew, don
@@ -63,21 +62,30 @@ def compute_return(rew, don, γ):
 
 def reinforce(env, policy):
     step_batch = 256
-    γ = .95
-    optimizer = th.optim.Adam(policy.parameters(), lr=1e-3)
+    γ = .9
+    value_factor = 1e-3
+    optimizer = th.optim.Adam(policy.parameters(), lr=1e-2)
     for obs, act, rew, don in collect(env, policy, step_batch):
         ret = compute_return(rew, don, γ)
+        val = policy.value(obs[:-1]).squeeze(-1)
+        with th.no_grad():
+            adv = ret - val
+        loss = ( - policy.log_prob(obs[:-1], act) * adv + value_factor * (ret - val) ** 2).sum()
         optimizer.zero_grad()
-        loss = ( - policy.log_prob(obs[:-1], act) * ret).sum()
         loss.backward()
         optimizer.step()
-        print('loss={:.2f} rew={:.2f} ret={:.2f}'.format(loss.item(), rew.mean().item(), ret.mean().item()))
+        print('loss={:.2f} rew={:.2f} ret={:.2f}, val={:.2f}'.format(
+            loss.item(), rew.mean().item(), ret.mean().item(), val.mean().item()))
         # env.render()
 
 if __name__ == '__main__':
     import gridpt as gt
-    env = gt.GridEnv(gt.read_grid('grids/basic.png'), batch=64)
+    env = gt.GridEnv(gt.read_grid('grids/basic.png'), batch=1024)
     reinforce(env, Policy(
-        nn.Linear(2, 64),
-        Multinomial(64, env.D * 2)
+        nn.Sequential(
+            nn.Linear(2, 64),
+            nn.Tanh(),
+        ),
+        Multinomial(64, env.D * 2),
+        nn.Linear(64, 1),
     ))
