@@ -79,7 +79,7 @@ def reinforce(env, policy):
 
 if __name__ == '__main__':
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=1024)
+    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=1024, timeout=128)
     reinforce(env, Policy(
         nn.Sequential(
             nn.Linear(2, 64),

@@ -40,23 +40,20 @@ class GridEnv:
         a is B array of actions
         returns observation of new state, reward, done, debug
         """
-        new_pos = self.pos + self.dirs[a.type(th.long)]
+        new_pos = self.pos + self.dirs[a]
         walkable = self.grid[tuple(new_pos.t())] != cell_wall
         reward = walkable.to(th.float32) - 1
         self.pos[walkable] = new_pos[walkable]
         # | and & are elementwise-bitwise 'or' and 'and'
         self.found_intermediate = self.found_intermediate | (self.grid[tuple(self.pos.t())] == cell_intermediate)
         done = self.found_intermediate & (self.grid[tuple(self.pos.t())] == cell_end)
-        if done.any():
-            reward[done] += 10
-            self.found_intermediate[done] = 0
+        reward[done] += 10
+        self.found_intermediate[done] = 0
         self.time += 1
-        finish_times = self.time[done]
         done = done | (self.timeout >= 0 and self.time > self.timeout)
         self.time[done] = 0
-        if done.any():
-            self.pos[done] = self.init
-        return self.pos, reward, done, finish_times
+        self.pos[done] = self.init
+        return self.pos, reward, done, None
 
     def render(self):
         if self.D != 2:
