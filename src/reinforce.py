@@ -22,7 +22,7 @@ class ConvGrid(nn.Module):
         self.input_dim = input_dim
         self.kernel_size = kernel_size
         self.num_channels = num_channels
-        assert(self.input_dim - 1 == (self.input_dim - 1) // (self.kernel_size - 1) * (self.kernel_size - 1))
+        assert((self.input_dim - 1) % (self.kernel_size - 1) == 0)
         self.num_conv = (self.input_dim - 1) // (self.kernel_size - 1)
 
         layers = []
@@ -33,8 +33,9 @@ class ConvGrid(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
-        output = self.layers(obs)
-        return output.squeeze(3).squeeze(2)
+        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        output = self.layers(input)
+        return output.view(obs.size()[:-3] + (self.num_channels,))
 
 
 class Policy(nn.Module):
@@ -105,9 +106,9 @@ def reinforce(env, policy):
 
 if __name__ == '__main__':
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=1024, timeout=128)
+    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=64, timeout=128)
     reinforce(env, Policy(
-        ConvGrid(25, 64, 3),
+        ConvGrid(5, 64, 3),
         Multinomial(64, env.D * 2),
         nn.Linear(64, 1),
     ))
