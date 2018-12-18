@@ -78,8 +78,8 @@ def reinforce(env, policy):
             loss.item(), rew.mean().item(), ret.mean().item(), val.mean().item()))
 
 if __name__ == '__main__':
-    import gridpt as gt
-    env = gt.GridEnv(gt.read_grid('grids/basic.png'), batch=1024)
+    import grid as gd
+    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=1024)
     reinforce(env, Policy(
         nn.Sequential(
             nn.Linear(2, 64),
