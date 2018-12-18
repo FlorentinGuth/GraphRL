@@ -9,11 +9,12 @@ class Multinomial(nn.Module):
         self.linear = nn.Linear(features_dim, output_dim)
         self.softmax = nn.Softmax(-1)
 
-    def sample(self, features):
-        return self.softmax(self.linear(features)).multinomial(1)
-
-    def log_prob(self, features, value):
-        return th.log(self.softmax(self.linear(features))).gather(-1, value.unsqueeze(-1).to(th.long)).squeeze(-1)
+    def forward(self, features):
+        # features is * x features_dim
+        output = self.softmax(self.linear(features)) # * x output_dim
+        action = output.multinomial(1).squeeze(-1) # *, long, no grad
+        log_prob = th.log(output).gather(-1, action.unsqueeze(-1)).squeeze(-1) # *, log of proba(chosen action), grad
+        return action, log_prob
 
 
 class ConvGrid(nn.Module):
@@ -45,46 +46,41 @@ class Policy(nn.Module):
         self.action_network = action_network
         self.value_network = value_network
 
-    def sample(self, obs):
+    def forward(self, obs):
+        # obs is * x env.obs_shape
         features = self.feature_network(obs)
-        return self.action_network.sample(features)
-
-    def log_prob(self, obs, value):
-        features = self.feature_network(obs)
-        return self.action_network.log_prob(features, value)
-
-    def value(self, obs):
-        features = self.feature_network(obs)
-        return self.value_network(features)
+        action, log_prob = self.action_network(features)
+        value = self.value_network(features).squeeze(-1) # *
+        return action, log_prob, value # *, *, *
 
 
 def collect(env, policy, step_batch):
-    with th.no_grad():
-        obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
-        act = th.zeros((step_batch, env.B), dtype=th.long)
-        rew = th.zeros((step_batch, env.B))
-        don = th.zeros((step_batch, env.B), dtype=th.uint8)
+    obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
+    act = th.zeros((step_batch, env.B), dtype=th.long)
+    lgp = th.zeros((step_batch, env.B))
+    val = th.zeros((step_batch, env.B))
+    rew = th.zeros((step_batch, env.B))
+    don = th.zeros((step_batch, env.B), dtype=th.uint8)
 
     obs[0] = env.reset()
 
     while True:
         for t in range(step_batch):
-            act[t] = policy.sample(obs[t]).view(-1)
+            act[t], lgp[t], val[t] = policy(obs[t])
             obs[t+1], rew[t], don[t], _ = env.step(act[t])
-        yield obs, act, rew, don
+        yield obs, act, lgp, val, rew, don
         obs[0] = obs[-1]
 
 
 def compute_return(rew, don, γ):
-    with th.no_grad():
-        ret = th.zeros(rew.shape)
-        T = rew.shape[0]
-        for t in range(T):
-            γ_l = th.ones((rew.shape[1]))
-            for l in range(t, T):
-                ret[t] += γ_l * rew[l]
-                γ_l *= γ * (1 - don[l]).to(th.float32)
-        return ret
+    ret = th.zeros(rew.shape)
+    T = rew.shape[0]
+    for t in range(T):
+        γ_l = th.ones((rew.shape[1]))
+        for l in range(t, T):
+            ret[t] += γ_l * rew[l]
+            γ_l *= γ * (1 - don[l]).to(th.float32)
+    return ret
 
 
 def reinforce(env, policy):
@@ -92,12 +88,10 @@ def reinforce(env, policy):
     γ = .9
     value_factor = 1e-3
     optimizer = th.optim.Adam(policy.parameters(), lr=1e-2)
-    for obs, act, rew, don in collect(env, policy, step_batch):
+    for obs, act, lgp, val, rew, don in collect(env, policy, step_batch):
         ret = compute_return(rew, don, γ)
-        val = policy.value(obs[:-1]).squeeze(-1)
-        with th.no_grad():
-            adv = ret - val
-        loss = (-policy.log_prob(obs[:-1], act) * adv + value_factor * (ret - val) ** 2).sum()
+        adv = ret - val.data
+        loss = (-lgp * adv + value_factor * (ret - val) ** 2).sum()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
