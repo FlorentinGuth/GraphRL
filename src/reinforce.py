@@ -54,42 +54,46 @@ class Policy(nn.Module):
         return action, log_prob, value # *, *, *
 
 
-def collect(env, policy, step_batch):
-    obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
-    act = th.zeros((step_batch, env.B), dtype=th.long)
-    lgp = th.zeros((step_batch, env.B))
-    val = th.zeros((step_batch, env.B))
-    rew = th.zeros((step_batch, env.B))
-    don = th.zeros((step_batch, env.B), dtype=th.uint8)
+def collect(env, policy, step_batch, horizon, γ):
+    obs = th.zeros((step_batch + horizon + 1, env.B) + env.obs_shape)
+    act = th.zeros((step_batch + horizon, env.B), dtype=th.long)
+    lgp = th.zeros((step_batch + horizon, env.B))
+    val = th.zeros((step_batch + horizon, env.B))
+    rew = th.zeros((step_batch + horizon, env.B))
+    don = th.zeros((step_batch + horizon, env.B), dtype=th.uint8)
 
     obs[0] = env.reset()
 
+    for t in range(horizon):
+        act[t], lgp[t], val[t] = policy(obs[t])
+        obs[t + 1], rew[t], don[t], _ = env.step(act[t])
     while True:
-        for t in range(step_batch):
+        for t in range(horizon, horizon + step_batch):
             act[t], lgp[t], val[t] = policy(obs[t])
             obs[t+1], rew[t], don[t], _ = env.step(act[t])
-        yield obs, act, lgp, val, rew, don
-        obs[0] = obs[-1]
+        ret = compute_return(rew, don, γ, step_batch, horizon)
+        yield obs[:step_batch], act[:step_batch], lgp[:step_batch], val[:step_batch], rew[:step_batch], don[:step_batch], ret
+        for tensor in (obs, act, lgp, val, rew, don):
+            tensor[:horizon] = tensor[step_batch:]
 
 
-def compute_return(rew, don, γ):
-    ret = th.zeros(rew.shape)
-    T = rew.shape[0]
-    for t in range(T):
+def compute_return(rew, don, γ, step_batch, horizon):
+    ret = th.zeros((step_batch,) + rew.shape[1:])
+    for t in range(step_batch):
         γ_l = th.ones((rew.shape[1]))
-        for l in range(t, T):
-            ret[t] += γ_l * rew[l]
-            γ_l *= γ * (1 - don[l]).to(th.float32)
+        for l in range(horizon):
+            ret[t] += γ_l * rew[t + l]
+            γ_l *= γ * (1 - don[t + l]).to(th.float32)
     return ret
 
 
 def reinforce(env, policy):
     step_batch = 256
+    horizon = 64
     γ = .9
     value_factor = 1e-3
     optimizer = th.optim.Adam(policy.parameters(), lr=1e-2)
-    for obs, act, lgp, val, rew, don in collect(env, policy, step_batch):
-        ret = compute_return(rew, don, γ)
+    for obs, act, lgp, val, rew, don, ret in collect(env, policy, step_batch, horizon, γ):
         adv = ret - val.data
         loss = (-lgp * adv + value_factor * (ret - val) ** 2).sum()
         optimizer.zero_grad()
