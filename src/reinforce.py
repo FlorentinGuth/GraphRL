@@ -36,9 +36,9 @@ class Policy(nn.Module):
 def collect(env, policy, step_batch):
     with th.no_grad():
         obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
-        act = th.zeros((step_batch, env.B), dtype=th.int)
+        act = th.zeros((step_batch, env.B), dtype=th.long)
         rew = th.zeros((step_batch, env.B))
-        don = th.zeros((step_batch, env.B), dtype=th.int)
+        don = th.zeros((step_batch, env.B), dtype=th.uint8)
 
     obs[0] = env.reset()
 
@@ -76,7 +76,6 @@ def reinforce(env, policy):
         optimizer.step()
         print('loss={:.2f} rew={:.2f} ret={:.2f}, val={:.2f}'.format(
             loss.item(), rew.mean().item(), ret.mean().item(), val.mean().item()))
-        # env.render()
 
 if __name__ == '__main__':
     import gridpt as gt
