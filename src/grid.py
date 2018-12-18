@@ -80,7 +80,7 @@ class GridEnv:
 
 def read_grid(file):
     grid = plt.imread(file, int).astype(int)
-    return th.from_numpy((grid[:, :, 0] << 16) + (grid[:, :, 1] << 8) + grid[:, :, 2])
+    return th.from_numpy((grid[:, :, 0] << 16) + (grid[:, :, 1] << 8) + grid[:, :, 2]).to(th.zeros(0).device)
 
 def render_grid(grid):
     plt.imshow(th.stack((

@@ -1,6 +1,7 @@
 import torch as th
 import torch.nn as nn
-
+import torch.optim as optim
+import torch.cuda as cuda
 
 class Multinomial(nn.Module):
     def __init__(self, features_dim, output_dim):
@@ -55,12 +56,12 @@ class Policy(nn.Module):
 
 
 def collect(env, policy, step_batch, horizon, γ):
-    obs = th.zeros((step_batch + horizon + 1, env.B) + env.obs_shape)
-    act = th.zeros((step_batch + horizon, env.B), dtype=th.long)
-    lgp = th.zeros((step_batch + horizon, env.B))
-    val = th.zeros((step_batch + horizon, env.B))
-    rew = th.zeros((step_batch + horizon, env.B))
-    don = th.zeros((step_batch + horizon, env.B), dtype=th.uint8)
+    obs = [None] * (step_batch + horizon + 1)
+    act = [None] * (step_batch + horizon)
+    lgp = [None] * (step_batch + horizon)
+    val = [None] * (step_batch + horizon)
+    rew = [None] * (step_batch + horizon)
+    don = [None] * (step_batch + horizon)
 
     obs[0] = env.reset()
 
@@ -72,15 +73,17 @@ def collect(env, policy, step_batch, horizon, γ):
             act[t], lgp[t], val[t] = policy(obs[t])
             obs[t+1], rew[t], don[t], _ = env.step(act[t])
         ret = compute_return(rew, don, γ, step_batch, horizon)
-        yield obs[:step_batch], act[:step_batch], lgp[:step_batch], val[:step_batch], rew[:step_batch], don[:step_batch], ret
-        for tensor in (obs, act, lgp, val, rew, don):
-            tensor[:horizon] = tensor[step_batch:]
+        def to_tensor(x):
+            return x if hasattr(x, 'shape') else th.stack(x[:step_batch], 0)
+        yield list(map(to_tensor, (obs, act, lgp, val, rew, don, ret)))
+        for x in (obs, act, lgp, val, rew, don):
+            x[:horizon] = x[step_batch:]
 
 
 def compute_return(rew, don, γ, step_batch, horizon):
-    ret = th.zeros((step_batch,) + rew.shape[1:])
+    ret = th.zeros((step_batch,) + rew[0].shape)
     for t in range(step_batch):
-        γ_l = th.ones((rew.shape[1]))
+        γ_l = th.ones((rew[0].shape[0]))
         for l in range(horizon):
             ret[t] += γ_l * rew[t + l]
             γ_l *= γ * (1 - don[t + l]).to(th.float32)
@@ -92,7 +95,7 @@ def reinforce(env, policy):
     horizon = 64
     γ = .9
     value_factor = 1e-3
-    optimizer = th.optim.Adam(policy.parameters(), lr=1e-2)
+    optimizer = optim.Adam(policy.parameters(), lr=1e-2)
     for obs, act, lgp, val, rew, don, ret in collect(env, policy, step_batch, horizon, γ):
         adv = ret - val.data
         loss = (-lgp * adv + value_factor * (ret - val) ** 2).sum()
@@ -103,8 +106,9 @@ def reinforce(env, policy):
             loss.item(), rew.mean().item(), ret.mean().item(), val.mean().item()))
 
 if __name__ == '__main__':
+    th.set_default_tensor_type(cuda.FloatTensor)
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=64, timeout=128)
+    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=64)
     reinforce(env, Policy(
         ConvGrid(5, 64, 3),
         Multinomial(64, env.D * 2),
