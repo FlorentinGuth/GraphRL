@@ -1,6 +1,7 @@
 import torch as th
 import torch.nn as nn
 
+
 class Multinomial(nn.Module):
     def __init__(self, features_dim, output_dim):
         super(Multinomial, self).__init__()
@@ -12,7 +13,30 @@ class Multinomial(nn.Module):
         return self.softmax(self.linear(features)).multinomial(1)
 
     def log_prob(self, features, value):
-        return th.log(self.softmax(self.linear(features))).gather(-1, value.unsqueeze(-1).type(th.LongTensor)).squeeze(-1)
+        return th.log(self.softmax(self.linear(features))).gather(-1, value.unsqueeze(-1).to(th.long)).squeeze(-1)
+
+
+class ConvGrid(nn.Module):
+    def __init__(self, input_dim, num_channels, kernel_size):
+        super(ConvGrid, self).__init__()
+        self.input_dim = input_dim
+        self.kernel_size = kernel_size
+        self.num_channels = num_channels
+        assert((self.input_dim - 1) % (self.kernel_size - 1) == 0)
+        self.num_conv = (self.input_dim - 1) // (self.kernel_size - 1)
+
+        layers = []
+        for i in range(self.num_conv):
+            in_channels = self.num_channels if i > 0 else 3
+            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
+            layers.append(nn.ReLU())
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, obs):
+        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        output = self.layers(input)
+        return output.view(obs.size()[:-3] + (self.num_channels,))
+
 
 class Policy(nn.Module):
     def __init__(self, feature_network, action_network, value_network):
@@ -33,6 +57,7 @@ class Policy(nn.Module):
         features = self.feature_network(obs)
         return self.value_network(features)
 
+
 def collect(env, policy, step_batch):
     with th.no_grad():
         obs = th.zeros((step_batch + 1, env.B) + env.obs_shape)
@@ -49,6 +74,7 @@ def collect(env, policy, step_batch):
         yield obs, act, rew, don
         obs[0] = obs[-1]
 
+
 def compute_return(rew, don, γ):
     with th.no_grad():
         ret = th.zeros(rew.shape)
@@ -60,6 +86,7 @@ def compute_return(rew, don, γ):
                 γ_l *= γ * (1 - don[l]).to(th.float32)
         return ret
 
+
 def reinforce(env, policy):
     step_batch = 256
     γ = .9
@@ -70,7 +97,7 @@ def reinforce(env, policy):
         val = policy.value(obs[:-1]).squeeze(-1)
         with th.no_grad():
             adv = ret - val
-        loss = ( - policy.log_prob(obs[:-1], act) * adv + value_factor * (ret - val) ** 2).sum()
+        loss = (-policy.log_prob(obs[:-1], act) * adv + value_factor * (ret - val) ** 2).sum()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -79,12 +106,9 @@ def reinforce(env, policy):
 
 if __name__ == '__main__':
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=1024)
+    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=64, timeout=128)
     reinforce(env, Policy(
-        nn.Sequential(
-            nn.Linear(2, 64),
-            nn.Tanh(),
-        ),
+        ConvGrid(5, 64, 3),
         Multinomial(64, env.D * 2),
         nn.Linear(64, 1),
     ))
