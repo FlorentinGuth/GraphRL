@@ -1,5 +1,4 @@
 import torch as th
-import torch
 import matplotlib.pyplot as plt
 
 cell_empty = 0x808080
@@ -57,7 +56,7 @@ class GridEnv:
         self.dust[idx] = self.dust_prob[idx].bernoulli()
         self.dust[(th.arange(self.B),) + tuple(self.pos.t())] = 0
 
-        reward = -self.dust.sum((1, 2))
+        reward -= self.dust.sum((1, 2))
 
         self.time += 1
         done = th.zeros(self.B, dtype=th.uint8)
