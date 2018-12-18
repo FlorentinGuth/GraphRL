@@ -28,13 +28,20 @@ class GridEnv:
         self.dirs = th.zeros((2*self.D, self.D), dtype=th.long) # AxD
         actions = th.arange(2*self.D)
         self.dirs[actions, actions//2] = 2*(actions % 2) - 1
-        self.obs_shape = (self.D,)
+        self.obs_shape = (3,) + self.grid.size() # grid, position, dust
         self.timeout = timeout
+
+    def observation(self):
+        obs = th.zeros((self.B,) + self.obs_shape)
+        obs[:, 0] = self.grid != cell_wall
+        obs[(th.arange(self.B), 1) + tuple(self.pos.t())] = 1
+        obs[:, 2] = self.dust
+        return obs
 
     def reset(self):
         self.pos[:] = self.init
         self.dust[:] = 0
-        return self.pos
+        return self.observation()
 
     def step(self, a):
         """
@@ -58,7 +65,8 @@ class GridEnv:
             done = self.time > self.timeout
         self.time[done] = 0
         self.pos[done] = self.init
-        return self.pos, reward, done, None
+
+        return self.observation(), reward, done, None
 
     def render(self):
         if self.D != 2:
