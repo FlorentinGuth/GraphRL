@@ -12,7 +12,7 @@ if __name__ == '__main__':
     plt.show()
 
     policy = th.load('policy.pth').to(th.device('cpu'))
-    env = grid.GridEnv(grid.read_grid('grids/intermediate.png'))
+    env = grid.GridEnv(grid.read_grid('grids/basic.png'))
     env.render()
     obs = env.reset()
     mean_reward = 0
