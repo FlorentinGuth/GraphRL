@@ -33,7 +33,7 @@ class GridEnv:
         self.timeout = timeout
 
     def generate_dust_prob(self):
-        generator = th.manual_seed(self.seed)
+        th.manual_seed(self.seed)
 
         # Parameters of the generation
         num_seeds = 5
@@ -49,14 +49,14 @@ class GridEnv:
 
         # Seeds: random corners/corridors of the grid
         seeds = (w * (num_neighbours <= 2).to(th.float32)).nonzero()  # Nx2
-        perm = th.randperm(seeds.shape[0], generator=generator)[:min(num_seeds, seeds.shape[0])]
+        perm = th.randperm(seeds.shape[0])[:min(num_seeds, seeds.shape[0])]
         seeds = seeds[perm]
 
         # Iterate diffusion from the seeds
         num_averages = (num_neighbours + 1).to(th.float32)  # H-2xW-2, float
         dust_prob = th.zeros(self.grid.shape)
         dust_prob[1:-1, 1:-1][tuple(seeds.t())] = min_proba + \
-                                                  (max_proba - min_proba) * th.rand(seeds.size(0), generator=generator)
+                                                  (max_proba - min_proba) * th.rand(seeds.size(0))
         for _ in range(num_iter):
             dust_prob[1:-1, 1:-1] = w * (sum_neighbours(dust_prob) + dust_prob[1:-1, 1:-1]) / num_averages
 
