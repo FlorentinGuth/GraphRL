@@ -13,6 +13,9 @@ class Multinomial(nn.Module):
     def forward(self, features):
         # features is * x features_dim
         output = self.softmax(self.linear(features)) # * x output_dim
+        if not (output >= 0).all():
+            print('wtf')
+            print(output.min().item())
         action = output.multinomial(1).squeeze(-1) # *, long, no grad
         log_prob = th.log(output).gather(-1, action.unsqueeze(-1)).squeeze(-1) # *, log of proba(chosen action), grad
         return action, log_prob
@@ -95,22 +98,23 @@ def reinforce(env, policy):
     horizon = 64
     γ = .9
     value_factor = 1e-3
-    optimizer = optim.Adam(policy.parameters(), lr=1e-2)
+    optimizer = optim.Adam(policy.parameters(), lr=1e-3)
     for obs, act, lgp, val, rew, don, ret in collect(env, policy, step_batch, horizon, γ):
         adv = ret - val.data
         loss = (-lgp * adv + value_factor * (ret - val) ** 2).sum()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        th.save(policy, 'policy.pth')
         print('loss={:.2f} rew={:.2f} ret={:.2f}, val={:.2f}'.format(
             loss.item(), rew.mean().item(), ret.mean().item(), val.mean().item()))
 
 if __name__ == '__main__':
-    th.set_default_tensor_type(cuda.FloatTensor)
+    # th.set_default_tensor_type(cuda.FloatTensor)
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=64)
+    env = gd.GridEnv(gd.read_grid('grids/intermediate.png'), batch=64)
     reinforce(env, Policy(
-        ConvGrid(5, 64, 3),
+        ConvGrid(env.grid.shape[0], 64, 3),
         Multinomial(64, env.D * 2),
         nn.Linear(64, 1),
     ))

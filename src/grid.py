@@ -85,7 +85,7 @@ class GridEnv:
         self.pos[walkable] = new_pos[walkable]
 
         idx = (self.dust == 0) & (self.dust_prob > 0)
-        self.dust[idx] = self.dust_prob[idx].bernoulli()
+        self.dust[idx] = self.dust_prob.expand_as(self.dust)[idx].bernoulli()
         self.dust[(th.arange(self.B),) + tuple(self.pos.t())] = 0
 
         reward -= self.dust.sum((1, 2))
@@ -99,18 +99,23 @@ class GridEnv:
 
         return self.observation(), reward, done, None
 
-    def render(self):
+    def render(self, figure=None, title=None):
         if self.D != 2:
             raise ValueError('Impossible to render non-2D')
-        plt.figure()
+
+        if figure is not None:
+            figure.clear()
+        if title is not None:
+            plt.title(title)
         render_grid(self.grid)
         plt.imshow(self.dust_prob, alpha=0.5)
         y, x = self.pos.t()
         plt.scatter(x, y, marker='x')
         y, x = th.nonzero(self.dust[0]).t()
         plt.scatter(x, y, marker='o')
-        plt.show()
-
+        if figure is not None:
+            figure.canvas.draw_idle()
+            figure.canvas.flush_events()
 
 def read_grid(file):
     grid = plt.imread(file, int).astype(int)
