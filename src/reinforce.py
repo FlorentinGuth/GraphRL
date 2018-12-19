@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.cuda as cuda
 import psutil
+import time
 
 class Multinomial(nn.Module):
     def __init__(self, features_dim, output_dim):
@@ -32,7 +33,7 @@ class ConvGrid(nn.Module):
         for i in range(self.num_conv):
             in_channels = self.num_channels if i > 0 else 3
             layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
-            layers.append(nn.ReLU())
+            layers.append(nn.Tanh())
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
@@ -93,12 +94,13 @@ def compute_return(rew, don, γ, step_batch, horizon):
 
 
 def reinforce(env, policy):
-    step_batch = 256
+    step_batch = 32
     horizon = 64
     γ = .9
-    value_factor = 1e-2
+    value_factor = 3e-5
     optimizer = optim.Adam(policy.parameters(), lr=1e-3)
     epoch = 0
+    epoch_start = time.time()
     for obs, act, lgp, val, rew, don, ret in collect(env, policy, step_batch, horizon, γ):
         adv = ret - val.data
         loss = (-lgp * adv + value_factor * (ret - val) ** 2).sum()
@@ -107,15 +109,18 @@ def reinforce(env, policy):
         optimizer.step()
         th.save(policy, 'policy.pth')
         epoch += 1
-        print('epoch={} rew={:.2f} ret={:.2f}, val={:.2f}'.format(
-            epoch, rew.mean().item(), ret.mean().item(), val.mean().item()))
+        elapsed = time.time() - epoch_start
+        print('epoch={}, rew={:.2f}, ret={:.2f}, val={:.2f}, speed={}'.format(
+            epoch, rew.mean().item(), ret.mean().item(), val.mean().item(), int(step_batch * env.B / elapsed)))
+        epoch_start = time.time()
+
 
 if __name__ == '__main__':
     th.set_default_tensor_type(cuda.FloatTensor)
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/basic.png'), batch=256)
+    env = gd.GridEnv(gd.read_grid('grids/7x7.png'), batch=1024 * 6)
     reinforce(env, Policy(
-        ConvGrid(env.grid.shape[0], 64, 3),
-        Multinomial(64, env.D * 2),
-        nn.Linear(64, 1),
+        ConvGrid(env.grid.shape[0], 16, 3),
+        Multinomial(16, env.D * 2),
+        nn.Linear(16, 1),
     ))

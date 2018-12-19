@@ -86,9 +86,10 @@ class GridEnv:
 
         idx = (self.dust == 0) & (self.dust_prob > 0)
         self.dust[idx] = self.dust_prob.expand_as(self.dust)[idx].bernoulli()
+        reward += self.dust[(th.arange(self.B),) + tuple(self.pos.t())]
         self.dust[(th.arange(self.B),) + tuple(self.pos.t())] = 0
 
-        reward -= self.dust.sum((1, 2))
+        reward -= .01 * self.dust.sum((1, 2))
 
         self.time += 1
         done = th.zeros(self.B, dtype=th.uint8)
@@ -114,6 +115,7 @@ class GridEnv:
         y, x = th.nonzero(self.dust[0]).t()
         plt.scatter(x, y, marker='o')
         if figure is not None:
+            figure.canvas.flush_events()
             figure.canvas.draw_idle()
             figure.canvas.flush_events()
 
