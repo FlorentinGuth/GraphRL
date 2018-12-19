@@ -11,7 +11,7 @@ if __name__ == '__main__':
     fig = plt.figure()
     plt.show()
 
-    policy = th.load('policy.pth').to(th.device('cpu'))
+    policy = th.load('policy.pth', map_location='cpu')
     env = grid.GridEnv(grid.read_grid('grids/basic.png'))
     env.render()
     obs = env.reset()
