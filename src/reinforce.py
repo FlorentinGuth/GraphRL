@@ -36,7 +36,7 @@ class ConvGrid(nn.Module):
     def forward(self, obs):
         input = obs.view((-1, 3, self.input_dim, self.input_dim))
         output = self.layers(input)
-        return output.view(obs.size()[:-3] + (self.num_channels,))
+        return output.view(obs.shape[:-3] + (self.num_channels,))
 
 
 class Policy(nn.Module):
