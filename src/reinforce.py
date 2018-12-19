@@ -2,6 +2,7 @@ import torch as th
 import torch.nn as nn
 import torch.optim as optim
 import torch.cuda as cuda
+import psutil
 
 class Multinomial(nn.Module):
     def __init__(self, features_dim, output_dim):
@@ -77,7 +78,8 @@ def collect(env, policy, step_batch, horizon, γ):
             return x if hasattr(x, 'shape') else th.stack(x[:step_batch], 0)
         yield list(map(to_tensor, (obs, act, lgp, val, rew, don, ret)))
         for x in (obs, act, lgp, val, rew, don):
-            x[:horizon] = x[step_batch:]
+            x[:horizon] = x[-horizon:]
+
 
 
 def compute_return(rew, don, γ, step_batch, horizon):
@@ -96,6 +98,7 @@ def reinforce(env, policy):
     γ = .9
     value_factor = 1e-2
     optimizer = optim.Adam(policy.parameters(), lr=1e-3)
+    epoch = 0
     for obs, act, lgp, val, rew, don, ret in collect(env, policy, step_batch, horizon, γ):
         adv = ret - val.data
         loss = (-lgp * adv + value_factor * (ret - val) ** 2).sum()
@@ -103,8 +106,9 @@ def reinforce(env, policy):
         loss.backward()
         optimizer.step()
         th.save(policy, 'policy.pth')
-        print('loss={:.2f} rew={:.2f} ret={:.2f}, val={:.2f}'.format(
-            loss.item(), rew.mean().item(), ret.mean().item(), val.mean().item()))
+        epoch += 1
+        print('epoch={} rew={:.2f} ret={:.2f}, val={:.2f}'.format(
+            epoch, rew.mean().item(), ret.mean().item(), val.mean().item()))
 
 if __name__ == '__main__':
     th.set_default_tensor_type(cuda.FloatTensor)
