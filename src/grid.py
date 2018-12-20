@@ -1,19 +1,22 @@
 import torch as th
 import matplotlib.pyplot as plt
+import queue
+from concurrent.futures import ProcessPoolExecutor
 
 cell_empty = 0x808080
 cell_wall = 0x000000
 cell_start = 0x000080
-cell_dust = 0x800000
 
 class GridEnv:
-    def __init__(self, grid, batch=1, timeout=-1, seed=0):
+    def __init__(self, grid, batch=1, timeout=-1, seed=0, control='direction'):
         """
         grid is a D-dimensional array, 1 for walkable, 0 for non-walkable. It is assumed to have borders of 0s
         batch (B) is the number of parallel trajectories to simulate
 
         a pos is BxD array
         an action is an integer, index in the directions array
+
+        control is either 'direction' or 'node'
         """
         self.grid = grid
         self.init = th.nonzero(self.grid == cell_start)[0]
@@ -31,6 +34,31 @@ class GridEnv:
         self.dirs[actions, actions//2] = 2*(actions % 2) - 1
         self.obs_shape = (3,) + self.grid.size() # grid, position, dust
         self.timeout = timeout
+        self.control = control
+        if control == 'node':
+            self.dists = self.compute_dists()
+
+    def _compute_dist_from(self, init):
+        dists = th.full(self.grid.shape, -1)
+        q = queue.Queue(self.grid.shape[0] * self.grid.shape[1])
+        q.put((0, init))
+        while not q.empty():
+            d, u = q.get()
+            if dists[u] < 0 and self.grid[u] != cell_wall:
+                dists[u] = d
+                for dir in self.dirs:
+                    v = tuple(th.tensor(u) + dir)
+                    if self.grid[v] != cell_wall:
+                        q.put((d + 1, v))
+        return init, dists
+
+    def compute_dists(self):
+        with ProcessPoolExecutor(max_workers=20) as executor:
+            dists = th.full(self.grid.shape + self.grid.shape, -1)
+            size = self.grid.size(0)
+            for init, dist in executor.map(self._compute_dist_from, [(i // size, i % size) for i in range(size ** 2)]):
+                dists[init] = dist
+        return dists
 
     def generate_dust_prob(self):
         th.manual_seed(self.seed)
@@ -79,6 +107,11 @@ class GridEnv:
         a is B array of actions
         returns observation of new state, reward, done, debug
         """
+        if self.control == 'node':
+            dist = self.dists[tuple(a.t().unsqueeze(-1)) +
+                              tuple((self.pos[:, None, :] + self.dirs[None, :, :]).permute(2, 0, 1))]
+            dist[dist < 0] = dist.max() + 1
+            a = dist.argmin(1)
         new_pos = self.pos + self.dirs[a]
         walkable = self.grid[tuple(new_pos.t())] != cell_wall
         reward = walkable.to(th.float32) - 1
