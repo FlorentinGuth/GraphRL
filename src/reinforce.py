@@ -6,19 +6,16 @@ import psutil
 import time
 
 class Multinomial(nn.Module):
-    def __init__(self, features_dim, output_dim):
+    def __init__(self):
         super(Multinomial, self).__init__()
-        self.output_dim = output_dim
-        self.linear = nn.Linear(features_dim, output_dim)
         self.softmax = nn.Softmax(-1)
 
     def forward(self, features):
         # features is * x features_dim
-        output = self.softmax(self.linear(features)) # * x output_dim
+        output = self.softmax(features) # * x output_dim
         action = output.multinomial(1).squeeze(-1) # *, long, no grad
         log_prob = th.log(output).gather(-1, action.unsqueeze(-1)).squeeze(-1) # *, log of proba(chosen action), grad
         return action, log_prob
-
 
 class ConvGrid(nn.Module):
     def __init__(self, input_dim, num_channels, kernel_size):
@@ -40,6 +37,28 @@ class ConvGrid(nn.Module):
         input = obs.view((-1, 3, self.input_dim, self.input_dim))
         output = self.layers(input)
         return output.view(obs.shape[:-3] + (self.num_channels,))
+
+class ConvGridFixed(nn.Module):
+    def __init__(self, input_dim, num_channels, kernel_size, num_conv):
+        super(ConvGridFixed, self).__init__()
+        self.input_dim = input_dim
+        self.kernel_size = kernel_size
+        self.num_channels = num_channels
+        self.num_conv = num_conv
+
+        layers = []
+        for i in range(self.num_conv):
+            in_channels = self.num_channels if i > 0 else 3
+            layers.append(nn.ZeroPad2d(1)),
+            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
+            layers.append(nn.Tanh())
+        layers.append(nn.Conv2d(self.num_channels, 1, 1))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, obs):
+        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        output = self.layers(input)
+        return output.view(obs.shape[:-3] + (-1,))
 
 
 class Policy(nn.Module):
@@ -95,10 +114,10 @@ def compute_return(rew, don, γ, step_batch, horizon):
 
 def reinforce(env, policy):
     step_batch = 32
-    horizon = 64
-    γ = .9
-    value_factor = 3e-5
-    optimizer = optim.Adam(policy.parameters(), lr=1e-3)
+    horizon = 256
+    γ = .98
+    value_factor = 3e-4
+    optimizer = optim.Adam(policy.parameters(), lr=3e-3)
     epoch = 0
     epoch_start = time.time()
     for obs, act, lgp, val, rew, don, ret in collect(env, policy, step_batch, horizon, γ):
@@ -118,9 +137,15 @@ def reinforce(env, policy):
 if __name__ == '__main__':
     th.set_default_tensor_type(cuda.FloatTensor)
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/7x7.png'), batch=1024 * 6)
+    env = gd.GridEnv(gd.read_grid('grids/25x25.png'), batch=64 * 1, control='node')
     reinforce(env, Policy(
-        ConvGrid(env.grid.shape[0], 16, 3),
-        Multinomial(16, env.D * 2),
-        nn.Linear(16, 1),
+        nn.Sequential(),
+        nn.Sequential(
+            ConvGridFixed(env.obs_shape[1], 16, 3, 3),
+            Multinomial(),
+        ),
+        nn.Sequential(
+            ConvGrid(env.obs_shape[1], 16, 3),
+            nn.Linear(16, 1),
+        ),
     ))

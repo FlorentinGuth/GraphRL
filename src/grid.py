@@ -7,6 +7,22 @@ cell_empty = 0x808080
 cell_wall = 0x000000
 cell_start = 0x000080
 
+
+def _compute_dist_from(args):
+    grid, dirs, init = args
+    dists = th.full(grid.shape, -1)
+    q = queue.Queue(grid.shape[0] * grid.shape[1])
+    q.put((0, init))
+    while not q.empty():
+        d, u = q.get()
+        if dists[u] < 0 and grid[u] != cell_wall:
+            dists[u] = d
+            for dir in dirs:
+                v = tuple(th.tensor(u) + dir)
+                if grid[v] != cell_wall:
+                    q.put((d + 1, v))
+    return init, dists
+
 class GridEnv:
     def __init__(self, grid, batch=1, timeout=-1, seed=0, control='direction'):
         """
@@ -38,25 +54,12 @@ class GridEnv:
         if control == 'node':
             self.dists = self.compute_dists()
 
-    def _compute_dist_from(self, init):
-        dists = th.full(self.grid.shape, -1)
-        q = queue.Queue(self.grid.shape[0] * self.grid.shape[1])
-        q.put((0, init))
-        while not q.empty():
-            d, u = q.get()
-            if dists[u] < 0 and self.grid[u] != cell_wall:
-                dists[u] = d
-                for dir in self.dirs:
-                    v = tuple(th.tensor(u) + dir)
-                    if self.grid[v] != cell_wall:
-                        q.put((d + 1, v))
-        return init, dists
-
     def compute_dists(self):
         with ProcessPoolExecutor(max_workers=20) as executor:
             dists = th.full(self.grid.shape + self.grid.shape, -1)
             size = self.grid.size(0)
-            for init, dist in executor.map(self._compute_dist_from, [(i // size, i % size) for i in range(size ** 2)]):
+            grid, dirs = self.grid.cpu(), self.dirs.cpu()
+            for init, dist in executor.map(_compute_dist_from, [(grid, dirs, (i // size, i % size)) for i in range(size ** 2)]):
                 dists[init] = dist
         return dists
 
@@ -108,8 +111,10 @@ class GridEnv:
         returns observation of new state, reward, done, debug
         """
         if self.control == 'node':
+            if len(a.shape) < 2:
+                a = th.stack((a // self.grid.shape[0], a % self.grid.shape[0]), dim=-1)
             dist = self.dists[tuple(a.t().unsqueeze(-1)) +
-                              tuple((self.pos[:, None, :] + self.dirs[None, :, :]).permute(2, 0, 1))]
+                              tuple((self.pos[:, None, :] + self.dirs[None, :, :]).permute(2, 0, 1))].clone()
             dist[dist < 0] = dist.max() + 1
             a = dist.argmin(1)
         new_pos = self.pos + self.dirs[a]
