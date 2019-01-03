@@ -28,13 +28,13 @@ class ConvGrid(nn.Module):
 
         layers = []
         for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 3
+            in_channels = self.num_channels if i > 0 else 2
             layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
             layers.append(nn.Tanh())
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
-        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        input = obs.view((-1, 2, self.input_dim, self.input_dim))
         output = self.layers(input)
         return output.view(obs.shape[:-3] + (self.num_channels,))
 
@@ -48,7 +48,7 @@ class ConvGridFixed(nn.Module):
 
         layers = []
         for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 3
+            in_channels = self.num_channels if i > 0 else 2
             layers.append(nn.ZeroPad2d(1)),
             layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
             layers.append(nn.Tanh())
@@ -56,7 +56,7 @@ class ConvGridFixed(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
-        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        input = obs.view((-1, 2, self.input_dim, self.input_dim))
         output = self.layers(input)
         return output.view(obs.shape[:-3] + (-1,))
 
