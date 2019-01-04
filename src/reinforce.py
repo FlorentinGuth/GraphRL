@@ -1,64 +1,9 @@
-import torch as th
-import torch.nn as nn
 import torch.optim as optim
 import torch.cuda as cuda
 import psutil
 import time
 
-class Multinomial(nn.Module):
-    def __init__(self):
-        super(Multinomial, self).__init__()
-        self.softmax = nn.Softmax(-1)
-
-    def forward(self, features):
-        # features is * x features_dim
-        output = self.softmax(features) # * x output_dim
-        action = output.multinomial(1).squeeze(-1) # *, long, no grad
-        log_prob = th.log(output).gather(-1, action.unsqueeze(-1)).squeeze(-1) # *, log of proba(chosen action), grad
-        return action, log_prob
-
-class ConvGrid(nn.Module):
-    def __init__(self, input_dim, num_channels, kernel_size):
-        super(ConvGrid, self).__init__()
-        self.input_dim = input_dim
-        self.kernel_size = kernel_size
-        self.num_channels = num_channels
-        assert((self.input_dim - 1) % (self.kernel_size - 1) == 0)
-        self.num_conv = (self.input_dim - 1) // (self.kernel_size - 1)
-
-        layers = []
-        for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 3
-            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
-            layers.append(nn.Tanh())
-        self.layers = nn.Sequential(*layers)
-
-    def forward(self, obs):
-        input = obs.view((-1, 3, self.input_dim, self.input_dim))
-        output = self.layers(input)
-        return output.view(obs.shape[:-3] + (self.num_channels,))
-
-class ConvGridFixed(nn.Module):
-    def __init__(self, input_dim, num_channels, kernel_size, num_conv):
-        super(ConvGridFixed, self).__init__()
-        self.input_dim = input_dim
-        self.kernel_size = kernel_size
-        self.num_channels = num_channels
-        self.num_conv = num_conv
-
-        layers = []
-        for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 3
-            layers.append(nn.ZeroPad2d(1)),
-            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
-            layers.append(nn.Tanh())
-        layers.append(nn.Conv2d(self.num_channels, 1, 1))
-        self.layers = nn.Sequential(*layers)
-
-    def forward(self, obs):
-        input = obs.view((-1, 3, self.input_dim, self.input_dim))
-        output = self.layers(input)
-        return output.view(obs.shape[:-3] + (-1,))
+from models import *
 
 
 class Policy(nn.Module):
