@@ -77,5 +77,10 @@ if __name__ == '__main__':
     import grid as gd
     env = gd.GridEnv(gd.read_grid('grids/25x25.png'), batch=1024 * 8, control='dir')
     dqn(env,
-        ConvGridFixed(env.obs_shape[1], 16, 3, 5, 2)
+        Fixed(
+            num_channels=16,
+            kernel_size=3,
+            num_conv=5,
+            input_channels=2,
+            ),
     )

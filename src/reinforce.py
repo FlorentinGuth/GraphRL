@@ -7,6 +7,11 @@ from models import *
 
 
 class Policy(nn.Module):
+    ''' Combines networks
+    observation --feature_network-----action_network--> action, log_prob
+                                   |
+                                   ----value_netowrk--> value
+    '''
     def __init__(self, feature_network, action_network, value_network):
         super(Policy, self).__init__()
         self.feature_network = feature_network
@@ -86,11 +91,22 @@ if __name__ == '__main__':
     reinforce(env, Policy(
         nn.Sequential(),
         nn.Sequential(
-            ConvGridFixed(env.obs_shape[1], 16, 3, 3),
+            Fixed(
+                input_channels=2,
+                num_channels=16,
+                kernel_size=3,
+                num_conv=3,
+                ),
+            Flatten2D(),
             Multinomial(),
         ),
         nn.Sequential(
-            ConvGrid(env.obs_shape[1], 16, 3),
+            Narrowing(
+                input_dim=env.obs_shape[1],
+                num_channels=16,
+                kernel_size=3,
+                input_channels=2,
+                ),
             nn.Linear(16, 1),
         ),
     ))
