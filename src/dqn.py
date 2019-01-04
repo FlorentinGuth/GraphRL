@@ -3,30 +3,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.cuda as cuda
 import matplotlib.pyplot as plt
-from reinforce import *
 import time
 
-class ConvGridFixed(nn.Module):
-    def __init__(self, input_dim, num_channels, kernel_size, num_conv):
-        super(ConvGridFixed, self).__init__()
-        self.input_dim = input_dim
-        self.kernel_size = kernel_size
-        self.num_channels = num_channels
-        self.num_conv = num_conv
-
-        layers = []
-        for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 2
-            layers.append(nn.ZeroPad2d((self.kernel_size - 1) // 2)),
-            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
-            layers.append(nn.ReLU())
-        layers.append(nn.Conv2d(self.num_channels, 1, 1))
-        self.layers = nn.Sequential(*layers)
-
-    def forward(self, obs):
-        input = obs.view((-1, 2, self.input_dim, self.input_dim))
-        output = self.layers(input)
-        return output.squeeze(-3)
+from models import *
 
 def collect(env, network, step_batch, γ):
     obs = [None] * (step_batch + 0 + 1)
@@ -84,7 +63,7 @@ def dqn(env, network):
         elapsed = time.time() - epoch_start
         print('epoch={}, rew={:.2f}, ret={:.2f}, val={:.2f}, speed={}'.format(
             epoch, rew.mean().item(), ret.mean().item(), val.mean().item(), int(step_batch * env.B / elapsed)))
-        if epoch % 5000 == 0:
+        if epoch % 100000 == 0:
             plt.subplot(121)
             plt.imshow(env.grid.detach().cpu().numpy())
             plt.subplot(122)
@@ -96,9 +75,7 @@ def dqn(env, network):
 if __name__ == '__main__':
     th.set_default_tensor_type(cuda.FloatTensor)
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/9x9.png'), batch=1024 * 16, control='dir')
+    env = gd.GridEnv(gd.read_grid('grids/25x25.png'), batch=1024 * 8, control='dir')
     dqn(env,
-        nn.Sequential(
-            ConvGridFixed(env.obs_shape[1], 16, 3, 5),
-        ),
+        ConvGridFixed(env.obs_shape[1], 16, 3, 5, 2)
     )

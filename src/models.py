@@ -1,7 +1,6 @@
 import torch as th
 import torch.nn as nn
 
-
 def heat_kernel(L, t):
     ''' 
     L shape NxN, t shape T (times at which to compute)
@@ -84,45 +83,50 @@ class Multinomial(nn.Module):
 
 
 class ConvGrid(nn.Module):
-    def __init__(self, input_dim, num_channels, kernel_size):
+    def __init__(self, input_dim, num_channels, kernel_size, input_channels, activation=nn.ReLU()):
         super(ConvGrid, self).__init__()
         self.input_dim = input_dim
         self.kernel_size = kernel_size
         self.num_channels = num_channels
         assert ((self.input_dim - 1) % (self.kernel_size - 1) == 0)
         self.num_conv = (self.input_dim - 1) // (self.kernel_size - 1)
+        self.input_channels = input_channels
 
         layers = []
         for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 3
+            in_channels = self.num_channels if i > 0 else self.input_channels
             layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
-            layers.append(nn.Tanh())
+            layers.append(activation)
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
-        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        input = obs.view((-1, self.input_channels, self.input_dim, self.input_dim))
         output = self.layers(input)
         return output.view(obs.shape[:-3] + (self.num_channels,))
 
 
 class ConvGridFixed(nn.Module):
-    def __init__(self, input_dim, num_channels, kernel_size, num_conv):
+    def __init__(self, input_dim, num_channels, kernel_size, num_conv, input_channels,
+                 output_channels=1, activation=nn.ReLU()):
         super(ConvGridFixed, self).__init__()
         self.input_dim = input_dim
         self.kernel_size = kernel_size
         self.num_channels = num_channels
         self.num_conv = num_conv
+        self.input_channels = input_channels
+        self.output_channels = output_channels
 
         layers = []
         for i in range(self.num_conv):
-            in_channels = self.num_channels if i > 0 else 3
-            layers.append(nn.ZeroPad2d(1)),
-            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size))
-            layers.append(nn.Tanh())
-        layers.append(nn.Conv2d(self.num_channels, 1, 1))
+            in_channels = self.num_channels if i > 0 else self.input_channels
+            layers.append(nn.Conv2d(in_channels, self.num_channels, self.kernel_size, padding=(self.kernel_size-1)//2))
+            layers.append(activation)
+        layers.append(nn.Conv2d(self.num_channels, 1, output_channels))
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
-        input = obs.view((-1, 3, self.input_dim, self.input_dim))
+        input = obs.view((-1, self.input_channels, self.input_dim, self.input_dim))
         output = self.layers(input)
-        return output.view(obs.shape[:-3] + (-1,))
+        if self.output_channels == 1:
+            output = output.squeeze(-3)
+        return output
