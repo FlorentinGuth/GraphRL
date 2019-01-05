@@ -35,6 +35,7 @@ class GridEnv:
         control is either 'direction' or 'node'
         """
         self.grid = grid
+        self.walkability = self.grid != cell_wall  # HxW, byte
         self.init = th.nonzero(self.grid == cell_start)[0]
         self.D = self.grid.ndimension()
         self.B = batch
@@ -48,11 +49,13 @@ class GridEnv:
         self.dirs = th.zeros((2*self.D, self.D), dtype=th.long) # AxD
         actions = th.arange(2*self.D)
         self.dirs[actions, actions//2] = 2*(actions % 2) - 1
-        self.obs_shape = (2,) + self.grid.size() # grid, position, dust
+        self.obs_shape = (2,) + self.grid.shape # grid, position, dust
         self.timeout = timeout
         self.control = control
         if control == 'node':
             self.dists = self.compute_dists()
+
+        self.compute_graph_stuff()
 
     def compute_dists(self):
         with ProcessPoolExecutor(max_workers=20) as executor:
@@ -62,6 +65,51 @@ class GridEnv:
             for init, dist in executor.map(_compute_dist_from, [(grid, dirs, (i // size, i % size)) for i in range(size ** 2)]):
                 dists[init] = dist
         return dists
+
+    def compute_graph_stuff(self):
+        ''' Compute W, D, L, λ and Φ from the walkability mask. '''
+        h, w = self.grid.shape
+        mask = self.walkability.view(-1)
+
+        xx, yy = th.meshgrid(th.arange(w), th.arange(h))
+        W = th.zeros((h * w, h * w))
+        W[h * xx.contiguous()[1:].view(-1) + yy.contiguous()[1:].view(-1),
+          h * (xx.contiguous()[1:] - 1).view(-1) + yy.contiguous()[1:].view(-1)] = 1
+        W[h * xx.contiguous()[:-1].view(-1) + yy.contiguous()[:-1].view(-1),
+          h * (xx.contiguous()[:-1] + 1).view(-1) + yy.contiguous()[:-1].view(-1)] = 1
+        W[h * xx[:, 1:].contiguous().view(-1) + yy[:, 1:].contiguous().view(-1),
+          h * xx[:, 1:].contiguous().view(-1) + (yy[:, 1:].contiguous() - 1).view(-1)] = 1
+        W[h * xx[:, 1:].contiguous().view(-1) + yy[:, :-1].contiguous().view(-1),
+          h * xx[:, 1:].contiguous().view(-1) + (yy[:, :-1].contiguous() + 1).view(-1)] = 1
+        self.W_full = W # adjacency in the full graph, taking non-walkable cells into account
+
+        W = W[mask][:, mask] # MxM
+        M = W.shape[0]
+        self.W = W # adjacency in the reduced graph, eliminating non-walkable cells
+
+        D = self.W.sum(1) # M
+        self.L = th.diag(D) - self.W # MxM
+        self.λ, self.Φ = th.symeig(self.L, eigenvectors=True) # M, MxM (vectors are in columns and not rows!)
+        # L = Φ diag(λ) Φ^T
+
+        D = self.dirs.shape[0]
+
+        self.idx = mask.nonzero().t()[0]  # indices in [0,M-1] to [0,H*W-1]
+        self.idxinv = -th.ones(h * w, dtype=th.long)
+        self.idxinv[mask] = th.arange(M)  # indices in [0,H*W-1] to [0,M-1]
+
+        # YES, I WROTE A FOR LOOP, BUT I DON'T CARE ANYMORE
+        nxt = th.zeros((D, M), dtype=th.long)  # next[a,i] = i or i+a if applicable
+        for a in range(D):
+            for iM in range(M):
+                iN = self.idx[iM]
+                ix, iy = iN // h, iN % h
+                jx, jy = ix + self.dirs[a, 1], iy + self.dirs[a, 0]
+                jN = h * jy + jx
+                jM = self.idxinv[jN]
+                nxt[a, iM] = (jM if jM >= 0 else iM)
+        # next[action,i] is the cell (in [0,M-1]) you end up if you take action a (this is i itself in case of a wall)
+        self.next = nxt # 4xM
 
     def generate_dust_prob(self):
         th.manual_seed(self.seed)
@@ -73,10 +121,9 @@ class GridEnv:
         min_proba = max_proba / 3
         num_iter = 10
 
-        walkability = self.grid != cell_wall  # HxW, byte
         sum_neighbours = lambda g: g[0:-2, 1:-1] + g[2:, 1:-1] + g[1:-1, 0:-2] + g[1:-1, 2:]
-        num_neighbours = sum_neighbours(walkability)  # H-2xW-2, byte
-        w = walkability[1:-1, 1:-1].to(th.float32)  # H-2xW-2, float
+        num_neighbours = sum_neighbours(self.walkability)  # H-2xW-2, byte
+        w = self.walkability[1:-1, 1:-1].to(th.float32)  # H-2xW-2, float
 
         # Seeds: random corners/corridors of the grid
         seeds = (w * (num_neighbours <= 2).to(th.float32)).nonzero()  # Nx2
@@ -95,7 +142,7 @@ class GridEnv:
 
     def observation(self):
         obs = th.zeros((self.B,) + self.obs_shape)
-        obs[:, 0] = self.grid != cell_wall
+        obs[:, 0] = self.walkability
         # obs[(th.arange(self.B), 1) + tuple(self.pos.t())] = 1
         obs[:, 1] = self.dust
         return obs

@@ -88,10 +88,9 @@ class ConvSpectral(nn.Module):
     Receptive field:       infinite
     Complexity of forward: TODO
     '''
-    def __init__(self, L, d, in_channels, out_channels):
+    def __init__(self, L, in_channels, out_channels):
         ''' Constructs a spectral convolution layer on the supplied graph.
-        L: N x N, the laplacian of the graph (assumed symmetric)
-        d: number of eigenvectors to consider (between 0 and N)
+        L: M x M, the laplacian of the graph (assumed symmetric)
         '''
         super().__init__()
         self.input_ndim = 1
@@ -100,8 +99,10 @@ class ConvSpectral(nn.Module):
         # L = vectors diag(values) vectors^T
         self.V = V # M x M
         self.e = e # M
+
         self.w = nn.Parameter(th.empty((out_channels, in_channels, e.shape[0])))
         self.b = nn.Parameter(th.empty((out_channels, e.shape[0])))
+        self.reset_parameters()
 
     def reset_parameters(self):
         init.kaiming_uniform_(self.w)
@@ -112,9 +113,9 @@ class ConvSpectral(nn.Module):
         Input:  B x C_in x M
         Output: B x C_out x M
         '''
-        x = th.matmul(self.V.t(), x) # B x C_in x M in spectral basis
+        x = th.tensordot(x, self.V.t(), dims=([2], [1])) # B x C_in x M in spectral basis
         x = th.sum(self.w[None,:,:,:] * x[:,None,:,:], dim=2) + self.b[None,:,:]
-        x = th.matmul(self.V, x) # B x C_out x M in spatial basis
+        x = th.tensordot(x, self.V, dims=([2], [1])) # B x C_out x M in spatial basis
         return x
 
 
@@ -172,7 +173,8 @@ class Narrowing(nn.Module):
             in_channels = self.num_channels if i > 0 else self.input_channels
             layers.append(ConvGrid(in_channels=in_channels, out_channels=self.num_channels,
                                    kernel_size=self.kernel_size))
-            layers.append(self.activation())
+            if i < self.num_conv - 1:
+                layers.append(self.activation())
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
@@ -220,7 +222,8 @@ class Fixed(nn.Module):
             out_channels = self.num_channels if i < self.num_conv - 1 else self.output_channels
             layers.append(self.conv(in_channels=in_channels, out_channels=out_channels, **self.conv_kwargs))
             self.input_ndim = layers[-1].input_ndim # 1D (graph) or 2D (grid) convolution
-            layers.append(self.activation())
+            if i < self.num_conv - 1:
+                layers.append(self.activation())
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
@@ -271,7 +274,8 @@ class Decoupled(nn.Module):
             out_channels = self.num_channels if i < self.num_conv - 1 else self.output_channels
             layers.append(Conv1x1(in_channels, out_channels, self.input_ndim))
             layers.append(self.diff(**self.diff_kwargs))
-            layers.append(self.activation())
+            if i < self.num_conv - 1:
+                layers.append(self.activation())
         self.layers = nn.Sequential(*layers)
 
     def forward(self, obs):
@@ -327,3 +331,41 @@ class Lambda(nn.Module):
 class Flatten2D(nn.Module):
     def forward(self, x):
         return x.view(x.shape[:-2] + (-1,))
+
+
+class GatherToGraph(nn.Module):
+    def __init__(self, G):
+        '''
+        :param G: HxW, walkability mask
+        :return: 
+        '''
+        super().__init__()
+        self.flatten = Flatten2D()
+        self.I = th.nonzero(G.view(-1)).squeeze(1) # M
+
+    def forward(self, x):
+        '''
+        Input:  * x H x W
+        Output: * x M
+        '''
+        return th.index_select(self.flatten(x), -1, self.I)
+
+
+class ScatterToGrid(nn.Module):
+    def __init__(self, G):
+        '''
+        :param G: HxW, walkability mask
+        :return: 
+        '''
+        super().__init__()
+        self.G = G
+        self.I = th.nonzero(G.view(-1)).squeeze(1) # M
+
+    def forward(self, x):
+        '''
+        Input:  * x M
+        Output: * x H x W
+        '''
+        y = th.zeros(x.shape[:-1] + (self.G.numel(),))
+        y.scatter_(dim=-1, index=self.I.expand(x.shape), src=x)
+        return y.view(x.shape[:-1] + self.G.shape)
