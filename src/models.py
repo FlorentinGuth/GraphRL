@@ -10,6 +10,23 @@ import torch.nn.init as init
 '''
 
 
+# Utils
+
+
+def heat_kernel(λ, Φ, t):
+    ''' Computes heat kernels at various times, using the D (out of M) eigenvectors provided.
+    λ shape D, Φ shape MxD, t shape T (times at which to compute)
+    Returns h[t,x,y] (shape TxMxM)
+    Complexity: T * M² * D
+    '''
+    Φ = Φ.t()  # DxM
+    outers = Φ[:, None, :] * Φ[:, :, None]  # outers[i,x,y] = Φi[x] Φi[y] (DxMxM)
+    f = th.exp(- λ[None, :] * t[:, None])  # TxD
+    h = th.tensordot(f, outers, dims=1)  # TxMxM
+    return h
+
+
+
 # Convolutions
 
 class Conv1x1(nn.Module):
@@ -89,17 +106,17 @@ class ConvSpectral(nn.Module):
     Complexity of forward: M * C * max(C, D)
     '''
     # TODO: allow to subsample first eigenvectors and use cubic splines to interpolate the missing coefficients
-    def __init__(self, L, d, in_channels, out_channels):
+    def __init__(self, λ, Φ, d, in_channels, out_channels):
         ''' Constructs a spectral convolution layer on the supplied graph.
-        L: M x M, the laplacian of the graph (assumed symmetric)
+        λ: M, eigenvalues of the laplacian
+        Φ: MxM, eigenvectors of the laplacian (in columns)
         '''
         super().__init__()
         self.input_ndim = 1
 
-        e, V = th.symeig(L, eigenvectors=True)
         # L = vectors diag(values) vectors^T
-        self.V = V[:,:d] # M x D
-        self.e = e[:d] # D
+        self.Φ = Φ[:, :d] # M x D
+        self.λ = λ[:d] # D
 
         self.w = nn.Parameter(th.empty((out_channels, in_channels, d)))
         self.b = nn.Parameter(th.empty((out_channels, d)))
@@ -114,28 +131,85 @@ class ConvSpectral(nn.Module):
         Input:  B x C_in x M
         Output: B x C_out x M
         '''
-        x = th.tensordot(x, self.V.t(), dims=([2], [1])) # B x C_in x D in spectral basis
+        x = th.tensordot(x, self.Φ.t(), dims=([2], [1])) # B x C_in x D in spectral basis
         x = th.sum(self.w[None,:,:,:] * x[:,None,:,:], dim=2) + self.b[None,:,:]
-        x = th.tensordot(x, self.V, dims=([2], [1])) # B x C_out x M in spatial basis
+        x = th.tensordot(x, self.Φ, dims=([2], [1])) # B x C_out x M in spatial basis
         return x
 
 
 class ConvPolynomial(nn.Module):
-    def __init__(self):
-        pass
+    pass
 
 
 class ConvHeat(nn.Module):
-    def __init__(self):
+    ''' Convolutions using learn anisotropic heat kernels.
+    This is not implemented yet, as we lack a backward for th.eig() (or a way to do without).
+    Besides, the laplacian may not even be positive.
+    '''
+    def __init__(self, next):
+        D, M = next.shape
+        self.grad = th.eye(M)[None] - th.eye(M)[next]  # DxMxM
+        self.div = th.eye(M)[next]  # DxMxM
+
+        self.A = th.empty((D, D))
+        self.reset_parameters()
+
+    def reset_paremeters(self):
+        self.A = init.kaiming_uniform_(self.A)
+
+    def heat_kernel(self):
+        Agrad = th.tensordot(self.A, self.grad, dims=1)  # DxMxM
+        divAgrad = th.tensordot(self.div, Agrad, dims=([0, 1], [0, 1]))  # MxM
+        L = -divAgrad
+        # XXX L is not symmetric and backward is not implemented for eig (but is for symeig)
         pass
 
 
 
 # Diffusions
 
-# Heat
-# Conv
-# Pooling
+
+class DiffConv(nn.Module):
+    ''' Diffuses information spatially using a convolution, treating channels as batches.
+    Number of parameters:  C * num_conv_param (typically k²)
+    Receptive field:       same as underlying convolution (but does not mix channels)
+    Complexity of forward: M * C * complexity of convolution (typically k²)
+    '''
+    def __int__(self, conv, **conv_kwargs):
+        '''
+        :param conv: the convolution to use
+        '''
+        super().__init__()
+        self.conv = conv(in_channels=1, out_channels=1, **conv_kwargs)
+
+    def forward(self, x):
+        '''
+        Input:  * x C x conv_input_shape
+        Output: * x C x conv_output_shape
+        '''
+        y =  self.conv(x.view((-1, 1) + x.shape[-self.conv.input_ndim:]))
+        return y.view(x.shape[:-self.conv.input_ndim] + y.shape[-self.conv.input_ndim:])
+
+
+class DiffHeat(nn.Module):
+    ''' Diffuses info spatially using heat kernels. 
+    Number of parameters:  0
+    Receptive field:       growing with t
+    Complexity of forward: M³ * C
+    '''
+    def __init__(self, λ, Φ, t):
+        self.h = heat_kernel(λ, Φ, th.Tensor(t)).squeeze(0) # MxM, symmetric
+
+    def forward(self, x):
+        '''
+        Input:  * x C x M
+        Output: * x C x M
+        '''
+        return th.tensordot(x, self.h, dims=1) # This effectively averages around each node since h.sum(0) = 1
+
+
+
+# TODO: some sort of pooling? (that wouldn't change input size...), or followed by upsampling...
 
 
 
@@ -338,7 +412,6 @@ class GatherToGraph(nn.Module):
     def __init__(self, G):
         '''
         :param G: HxW, walkability mask
-        :return: 
         '''
         super().__init__()
         self.flatten = Flatten2D()
@@ -356,7 +429,6 @@ class ScatterToGrid(nn.Module):
     def __init__(self, G):
         '''
         :param G: HxW, walkability mask
-        :return: 
         '''
         super().__init__()
         self.G = G
