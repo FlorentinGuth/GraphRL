@@ -84,11 +84,12 @@ class ConvMasked(ConvGrid):
 
 class ConvSpectral(nn.Module):
     ''' Spectral convolutions on a graph.
-    Number of parameters:  C_in * C_out * TODO
+    Number of parameters:  C_in * C_out * d
     Receptive field:       infinite
-    Complexity of forward: TODO
+    Complexity of forward: M * C * max(C, D)
     '''
-    def __init__(self, L, in_channels, out_channels):
+    # TODO: allow to subsample first eigenvectors and use cubic splines to interpolate the missing coefficients
+    def __init__(self, L, d, in_channels, out_channels):
         ''' Constructs a spectral convolution layer on the supplied graph.
         L: M x M, the laplacian of the graph (assumed symmetric)
         '''
@@ -97,11 +98,11 @@ class ConvSpectral(nn.Module):
 
         e, V = th.symeig(L, eigenvectors=True)
         # L = vectors diag(values) vectors^T
-        self.V = V # M x M
-        self.e = e # M
+        self.V = V[:,:d] # M x D
+        self.e = e[:d] # D
 
-        self.w = nn.Parameter(th.empty((out_channels, in_channels, e.shape[0])))
-        self.b = nn.Parameter(th.empty((out_channels, e.shape[0])))
+        self.w = nn.Parameter(th.empty((out_channels, in_channels, d)))
+        self.b = nn.Parameter(th.empty((out_channels, d)))
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -113,7 +114,7 @@ class ConvSpectral(nn.Module):
         Input:  B x C_in x M
         Output: B x C_out x M
         '''
-        x = th.tensordot(x, self.V.t(), dims=([2], [1])) # B x C_in x M in spectral basis
+        x = th.tensordot(x, self.V.t(), dims=([2], [1])) # B x C_in x D in spectral basis
         x = th.sum(self.w[None,:,:,:] * x[:,None,:,:], dim=2) + self.b[None,:,:]
         x = th.tensordot(x, self.V, dims=([2], [1])) # B x C_out x M in spatial basis
         return x
