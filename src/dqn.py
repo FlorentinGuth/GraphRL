@@ -40,17 +40,17 @@ def collect(env, network, step_batch, γ):
                 current_pos.t()[:, :, None] + env.dirs.t()[:, None, :])]
 
             ret[t] = rew[t] + γ * action_values.max(-1)[0].data
-
         def to_tensor(x):
             return x if hasattr(x, 'shape') else th.stack(x[:step_batch], 0)
         yield tuple(map(to_tensor, (obs, act, val, rew, don, ret)))
+        obs[0] = obs[-1]
         epsilon *= decay
 
 def dqn(env, network):
     step_batch = 1
 
     γ = .9
-    optimizer = optim.Adam(network.parameters(), lr=1e-4)
+    optimizer = optim.Adam(network.parameters(), lr=1e-3)
     epoch = 0
     epoch_start = time.time()
     for obs, act, val, rew, don, ret in collect(env, network, step_batch, γ):
@@ -63,11 +63,12 @@ def dqn(env, network):
         elapsed = time.time() - epoch_start
         print('epoch={}, rew={:.2f}, ret={:.2f}, val={:.2f}, speed={}'.format(
             epoch, rew.mean().item(), ret.mean().item(), val.mean().item(), int(step_batch * env.B / elapsed)))
-        if epoch % 100000 == 0:
+        if epoch % 5000 == 0:
             plt.subplot(121)
-            plt.imshow(env.grid.detach().cpu().numpy())
+            plt.imshow(((env.grid != gd.cell_wall).float() + obs[-1, 0, 1]).detach().cpu().numpy())
             plt.subplot(122)
-            plt.imshow(network(obs[0]).detach().cpu().numpy()[0])
+            plt.imshow(network(obs[-1]).detach().cpu().numpy()[0])
+            # plt.imshow(Smoothing((env.grid != gd.cell_wall).float(), .1, 5)(obs[-1, :, 0] + obs[-1, :, 1]).detach().cpu().numpy()[0])
             plt.show()
         epoch_start = time.time()
 
@@ -75,12 +76,25 @@ def dqn(env, network):
 if __name__ == '__main__':
     th.set_default_tensor_type(cuda.FloatTensor)
     import grid as gd
-    env = gd.GridEnv(gd.read_grid('grids/25x25.png'), batch=1024 * 8, control='dir')
+    env = gd.GridEnv(gd.read_grid('grids/7x7.png'), batch=1024 * 16, control='dir')
     dqn(env,
-        Fixed(
-            num_channels=16,
-            kernel_size=3,
-            num_conv=5,
+        Decoupled(
+            num_channels=4,
+            num_conv=2,
             input_channels=2,
-            ),
+            input_ndim=2,
+            activation=nn.ReLU,
+            diff=Smoothing,
+            diff_kwargs=dict(
+                mask=(env.grid != gd.cell_wall).float(),
+                factor=.2,
+                passes=5,
+            )
+        ),
+        # Fixed(
+        #     num_channels=16,
+        #     num_conv=3,
+        #     input_channels=2,
+        #     kernel_size=1,
+        # )
     )

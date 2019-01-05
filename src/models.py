@@ -1,6 +1,9 @@
 import torch as th
 import torch.nn as nn
 import torch.nn.init as init
+import torch.nn.functional as F
+import math
+import numbers
 
 
 ''' Notations:
@@ -43,7 +46,7 @@ class Conv1x1(nn.Module):
             conv = nn.Conv2d
         else:
             raise ValueError('Unknown input number of dimensions: {}'.format(input_ndim))
-        self.conv = conv(in_channels, out_channels)
+        self.conv = conv(in_channels, out_channels, kernel_size=1)
         self.input_ndim = input_ndim
 
     def forward(self, x):
@@ -147,6 +150,7 @@ class ConvHeat(nn.Module):
     Besides, the laplacian may not even be positive.
     '''
     def __init__(self, next):
+        super(ConvHeat, self).__init__()
         D, M = next.shape
         self.grad = th.eye(M)[None] - th.eye(M)[next]  # DxMxM
         self.div = th.eye(M)[next]  # DxMxM
@@ -166,7 +170,7 @@ class ConvHeat(nn.Module):
 
 
 
-# Diffusions
+# Diffusion
 
 
 class DiffConv(nn.Module):
@@ -175,20 +179,19 @@ class DiffConv(nn.Module):
     Receptive field:       same as underlying convolution (but does not mix channels)
     Complexity of forward: M * C * complexity of convolution (typically k²)
     '''
-    def __int__(self, conv, **conv_kwargs):
+    def __init__(self, channels, conv=ConvGrid, **conv_kwargs):
         '''
         :param conv: the convolution to use
         '''
-        super().__init__()
-        self.conv = conv(in_channels=1, out_channels=1, **conv_kwargs)
+        super(DiffConv, self).__init__()
+        self.conv = conv(in_channels=channels, out_channels=channels, groups=channels, **conv_kwargs)
 
     def forward(self, x):
         '''
         Input:  * x C x conv_input_shape
         Output: * x C x conv_output_shape
         '''
-        y =  self.conv(x.view((-1, 1) + x.shape[-self.conv.input_ndim:]))
-        return y.view(x.shape[:-self.conv.input_ndim] + y.shape[-self.conv.input_ndim:])
+        return self.conv(x)
 
 
 class DiffHeat(nn.Module):
@@ -198,6 +201,7 @@ class DiffHeat(nn.Module):
     Complexity of forward: M³ * C
     '''
     def __init__(self, λ, Φ, t):
+        super(DiffHeat, self).__init__()
         self.h = heat_kernel(λ, Φ, th.Tensor(t)).squeeze(0) # MxM, symmetric
 
     def forward(self, x):
@@ -208,6 +212,32 @@ class DiffHeat(nn.Module):
         return th.tensordot(x, self.h, dims=1) # This effectively averages around each node since h.sum(0) = 1
 
 
+class Smoothing(nn.Module):
+    def __init__(self, mask, factor, passes):
+        super(Smoothing, self).__init__()
+        self.mask = mask
+        self.factor = factor
+        self.passes = passes
+
+    def smooth_1d(self, input, dim):
+        idx = th.arange(input.size(dim) - 2) + 1
+        output = th.cat((
+            input.select(dim, 0).unsqueeze(dim),
+            self.factor * (input.index_select(dim, idx - 1) * self.mask.index_select(dim, idx - 1)
+                           + input.index_select(dim, idx + 1) * self.mask.index_select(dim, idx + 1)) + \
+            (1 - (self.mask.index_select(dim, idx - 1) + self.mask.index_select(dim, idx + 1)) * self.factor) * \
+            input.index_select(dim, idx),
+            input.select(dim, -1).unsqueeze(dim),
+        ), dim=dim)
+        output = self.mask * output + (1 - self.mask) * input
+        return output
+
+
+    def forward(self, input):
+        output = input
+        for _ in range(self.passes):
+            output = self.smooth_1d(self.smooth_1d(output, -1), -2)
+        return output
 
 # TODO: some sort of pooling? (that wouldn't change input size...), or followed by upsampling...
 
@@ -320,7 +350,7 @@ class Decoupled(nn.Module):
     Complexity of forward: num_conv * M * C * (C + diffusion_complexity)
     '''
     def __init__(self, input_channels, num_channels, num_conv, input_ndim, output_channels=1,
-                 activation=nn.ReLU, diff=ConvGrid, **diff_kwargs):
+                 activation=nn.ReLU, diff=ConvGrid, diff_kwargs=dict()):
         ''' The network is composed of a sequence of blocks, each block being a 1x1 convolution, a diffusion 
         and a non-linearity.
         :param input_channels: number of channels in the input
@@ -348,8 +378,8 @@ class Decoupled(nn.Module):
             in_channels = self.num_channels if i > 0 else self.input_channels
             out_channels = self.num_channels if i < self.num_conv - 1 else self.output_channels
             layers.append(Conv1x1(in_channels, out_channels, self.input_ndim))
-            layers.append(self.diff(**self.diff_kwargs))
             if i < self.num_conv - 1:
+                layers.append(self.diff(**self.diff_kwargs))
                 layers.append(self.activation())
         self.layers = nn.Sequential(*layers)
 
@@ -363,7 +393,7 @@ class Decoupled(nn.Module):
         # obs shape is batch_dim + (input_channels,) + input_dim
         input = obs.view((-1, self.input_channels) + input_dim)
         output = self.layers(input)
-        return output.view(batch_dim + (self.output_channels,) + input_dim)
+        return output.view(batch_dim + ((self.output_channels,) if self.output_channels > 1 else ()) + input_dim)
 
 
 class Hourglass(nn.Module):
