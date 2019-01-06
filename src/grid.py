@@ -52,10 +52,11 @@ class GridEnv:
         self.obs_shape = (3,) + self.grid.shape # grid, position, dust
         self.timeout = timeout
         self.control = control
-        if control == 'node':
-            self.dists = self.compute_dists()
+        self.dists = self.compute_dists()
         self.last_visit = th.zeros((self.B,) + self.grid.shape)
         self.compute_graph_stuff()
+
+        self.sight = 6
 
     def compute_dists(self):
         with ProcessPoolExecutor(max_workers=20) as executor:
@@ -144,8 +145,8 @@ class GridEnv:
         obs = th.zeros((self.B,) + self.obs_shape)
         obs[:, 0] = self.walkability
         # obs[(th.arange(self.B), 1) + tuple(self.pos.t())] = 1
-        obs[:, 1] = self.dust
-        obs[:, 2] = th.tanh(self.last_visit / 100)
+        obs[:, 1] = self.dust * (self.dists[tuple(self.pos.t())] < self.sight).float()
+        obs[:, 2] = th.tanh(self.last_visit / 300)
         return obs
 
     def reset(self):
@@ -204,7 +205,9 @@ class GridEnv:
             plt.imshow(values)
         y, x = self.pos.t()
         plt.scatter(x, y, marker='x')
-        y, x = th.nonzero(self.dust[0]).t()
+        y, x = th.nonzero(self.dust[0] * (self.dists[tuple(self.pos[0])] < self.sight).float()).t()
+        plt.scatter(x, y, marker='o')
+        y, x = th.nonzero(self.dust[0] * (self.dists[tuple(self.pos[0])] >= self.sight).float()).t()
         plt.scatter(x, y, marker='o')
         if figure is not None:
             figure.canvas.flush_events()
