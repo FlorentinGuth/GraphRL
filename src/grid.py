@@ -49,12 +49,12 @@ class GridEnv:
         self.dirs = th.zeros((2*self.D, self.D), dtype=th.long) # AxD
         actions = th.arange(2*self.D)
         self.dirs[actions, actions//2] = 2*(actions % 2) - 1
-        self.obs_shape = (2,) + self.grid.shape # grid, position, dust
+        self.obs_shape = (3,) + self.grid.shape # grid, position, dust
         self.timeout = timeout
         self.control = control
         if control == 'node':
             self.dists = self.compute_dists()
-
+        self.last_visit = th.zeros((self.B,) + self.grid.shape)
         self.compute_graph_stuff()
 
     def compute_dists(self):
@@ -145,6 +145,7 @@ class GridEnv:
         obs[:, 0] = self.walkability
         # obs[(th.arange(self.B), 1) + tuple(self.pos.t())] = 1
         obs[:, 1] = self.dust
+        obs[:, 2] = th.tanh(self.last_visit / 100)
         return obs
 
     def reset(self):
@@ -174,7 +175,10 @@ class GridEnv:
         reward += self.dust[(th.arange(self.B),) + tuple(self.pos.t())]
         self.dust[(th.arange(self.B),) + tuple(self.pos.t())] = 0
 
-        reward -= .01 * self.dust.sum((1, 2))
+        self.last_visit[(th.arange(self.B),) + tuple(self.pos.t())] = 0
+        self.last_visit += 1
+
+        # reward -= .01 * self.dust.sum((1, 2))
 
         self.time += 1
         done = th.zeros(self.B, dtype=th.uint8)
@@ -185,7 +189,7 @@ class GridEnv:
 
         return self.observation(), reward, done, None
 
-    def render(self, figure=None, title=None):
+    def render(self, figure=None, title=None, values=None):
         if self.D != 2:
             raise ValueError('Impossible to render non-2D')
 
@@ -193,8 +197,11 @@ class GridEnv:
             figure.clear()
         if title is not None:
             plt.title(title)
-        render_grid(self.grid)
-        plt.imshow(self.dust_prob, alpha=0.5)
+        if values is None:
+            render_grid(self.grid)
+            plt.imshow(self.dust_prob, alpha=0.5)
+        else:
+            plt.imshow(values)
         y, x = self.pos.t()
         plt.scatter(x, y, marker='x')
         y, x = th.nonzero(self.dust[0]).t()
