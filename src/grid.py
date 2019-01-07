@@ -146,7 +146,7 @@ class GridEnv:
         obs[:, 0] = self.walkability
         # obs[(th.arange(self.B), 1) + tuple(self.pos.t())] = 1
         obs[:, 1] = self.dust * (self.dists[tuple(self.pos.t())] < self.sight).float()
-        obs[:, 2] = th.tanh(self.last_visit / 300)
+        obs[:, 2] = th.tanh((self.last_visit - self.last_visit.mean()) / (self.last_visit.std() + 1e-3))
         return obs
 
     def reset(self):
@@ -176,7 +176,7 @@ class GridEnv:
         reward += self.dust[(th.arange(self.B),) + tuple(self.pos.t())]
         self.dust[(th.arange(self.B),) + tuple(self.pos.t())] = 0
 
-        self.last_visit[(th.arange(self.B),) + tuple(self.pos.t())] = 0
+        self.last_visit[self.dists[tuple(self.pos.t())] < 1] = 0
         self.last_visit += 1
 
         # reward -= .01 * self.dust.sum((1, 2))

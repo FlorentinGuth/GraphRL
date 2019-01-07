@@ -202,7 +202,7 @@ class DiffHeat(nn.Module):
     '''
     def __init__(self, λ, Φ, t):
         super(DiffHeat, self).__init__()
-        self.h = heat_kernel(λ, Φ, th.Tensor(t)).squeeze(0) # MxM, symmetric
+        self.h = heat_kernel(λ, Φ, th.tensor(t).unsqueeze(0)).squeeze(0) # MxM, symmetric
 
     def forward(self, x):
         '''

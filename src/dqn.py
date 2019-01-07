@@ -8,7 +8,7 @@ import argparse
 
 from models import *
 
-def collect(env, network, step_batch, γ, epsilon=1, decay=.9998):
+def collect(env, network, step_batch, γ, epsilon=1, decay=.999):
     obs = [None] * (step_batch + 0 + 1)
     act = [None] * (step_batch + 0)
     val = [None] * (step_batch + 0)
@@ -25,7 +25,8 @@ def collect(env, network, step_batch, γ, epsilon=1, decay=.9998):
 
     while True:
         for t in range(step_batch):
-            act[t] = action_values.argmax(-1)
+            act[t] = ((action_values - action_values.mean(-1, keepdim=True)) /
+                      (action_values.std(-1, keepdim=True) + 1e-3) * 5).softmax(-1).multinomial(1).squeeze(-1)
             act[t] = act[t].data
             if epsilon > 0:
                 bernoulli = th.full(act[t].shape, epsilon).bernoulli()
@@ -45,32 +46,37 @@ def collect(env, network, step_batch, γ, epsilon=1, decay=.9998):
         obs[0] = obs[-1]
         epsilon *= decay
 
-def dqn(env, network):
+def dqn(env, network, title):
     step_batch = 1
 
     γ = .98
     optimizer = optim.Adam(network.parameters(), lr=1e-3)
     epoch = 0
     epoch_start = time.time()
-    for obs, act, val, rew, don, ret in collect(env, network, step_batch, γ):
+
+    n_epochs = 50000
+    rewards = th.zeros(n_epochs)
+    for obs, act, val, rew, don, ret in collect(env, network, step_batch, γ, decay=.9998):
         loss = ((ret - val) ** 2).sum()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        th.save(network, 'network.pth')
+        th.save(network, 'storage/network-{}.pth'.format(title))
         epoch += 1
         elapsed = time.time() - epoch_start
         print('epoch={}, rew={:.2f}, ret={:.2f}, val={:.2f}, speed={}'.format(
             epoch, rew.mean().item(), ret.mean().item(), val.mean().item(), int(step_batch * env.B / elapsed)))
-        if epoch % 50000 == 0:
+        rewards[(epoch-1) % n_epochs] = rew.mean()
+        if epoch % n_epochs == 0:
+            th.save(rewards, 'storage/rewards-{}.pth'.format(title))
+            plt.plot(range(n_epochs), rewards.detach().cpu().numpy())
+            plt.savefig('storage/plot-{}'.format(title))
             plt.subplot(121)
             plt.imshow(((env.grid != gd.cell_wall).float() + obs[-1, 0, 1]).detach().cpu().numpy())
             plt.subplot(122)
             plt.imshow(network(obs[-1]).detach().cpu().numpy()[0])
-            # plt.imshow(Smoothing((env.grid != gd.cell_wall).float(), .1, 5)(obs[-1, :, 0] + obs[-1, :, 1]).detach().cpu().numpy()[0])
             plt.show()
         epoch_start = time.time()
-
 
 def enjoy(env, network):
     step = 0
@@ -92,35 +98,37 @@ def enjoy(env, network):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--enjoy', action='store_const', const=True, default=False)
+    parser.add_argument('--title', action='store', default='untitled')
+    parser.add_argument('--size', action='store', default=7)
     args = parser.parse_args()
 
     if args.enjoy:
         import grid as gd
-        env = gd.GridEnv(gd.read_grid('grids/25x25.png'), batch=1, control='dir')
-        network = th.load('network.pth', map_location='cpu')
+        env = gd.GridEnv(gd.read_grid('grids/{N}x{N}.png'.format(N=args.size)), batch=1, control='dir')
+        network = th.load('storage/network-{}.pth'.format(args.title), map_location='cpu')
+        # network.layers[1] = Smoothing(mask=(env.grid != gd.cell_wall).float(),
+        #             factor=.2,
+        #             passes=10,)
         enjoy(env, network)
     else:
         th.set_default_tensor_type(cuda.FloatTensor)
         import grid as gd
-        env = gd.GridEnv(gd.read_grid('grids/25x25.png'), batch=1024 * 1, control='dir')
+        env = gd.GridEnv(gd.read_grid('grids/{N}x{N}.png'.format(N=args.size)), batch=1024 * 4, control='dir')
         dqn(env,
-            Decoupled(
-                num_channels=8,
-                num_conv=2,
-                input_channels=3,
-                input_ndim=2,
-                activation=nn.Tanh,
-                diff=Smoothing,
-                diff_kwargs=dict(
-                    mask=(env.grid != gd.cell_wall).float(),
-                    factor=.2,
-                    passes=10,
-                )
+            nn.Sequential(
+                GatherToGraph(env.walkability),
+                Decoupled(
+                    num_channels=8,
+                    num_conv=2,
+                    input_channels=3,
+                    input_ndim=1,
+                    activation=nn.Tanh,
+                    diff=DiffHeat,
+                    diff_kwargs=dict(
+                        λ=env.λ, Φ=env.Φ, t=2.0,
+                    )
+                ),
+                ScatterToGrid(env.walkability),
             ),
-            # Fixed(
-            #     num_channels=16,
-            #     num_conv=3,
-            #     input_channels=2,
-            #     kernel_size=1,
-            # )
+            title=args.title,
         )
