@@ -54,7 +54,7 @@ class Conv1x1(nn.Module):
         Input:  B x C_in x *
         Output: B x C_out x *
         '''
-        return self.conv(x)
+        return self.conv(x).squeeze(-(1 + self.input_ndim))
 
 
 class ConvGrid(nn.Module):
@@ -137,7 +137,7 @@ class ConvSpectral(nn.Module):
         x = th.tensordot(x, self.Φ.t(), dims=([2], [1])) # B x C_in x D in spectral basis
         x = th.sum(self.w[None,:,:,:] * x[:,None,:,:], dim=2) + self.b[None,:,:]
         x = th.tensordot(x, self.Φ, dims=([2], [1])) # B x C_out x M in spatial basis
-        return x
+        return x.squeeze(-2)
 
 
 class ConvPolynomial(nn.Module):
@@ -238,6 +238,16 @@ class Smoothing(nn.Module):
         for _ in range(self.passes):
             output = self.smooth_1d(self.smooth_1d(output, -1), -2)
         return output
+
+
+class DiffDistance(nn.Module):
+    def __init__(self, dist, diffusion):
+        super().__init__()
+        self.kernel = th.exp(-dist / diffusion) * (dist >= 0).float()
+        self.kernel /= self.kernel.sum((-1, -2), keepdim=True) + 1e-9
+
+    def forward(self, x):
+        return th.tensordot(x, self.kernel, dims=2)
 
 # TODO: some sort of pooling? (that wouldn't change input size...), or followed by upsampling...
 
