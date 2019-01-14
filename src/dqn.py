@@ -84,6 +84,7 @@ def enjoy(env, network):
     step = 0
     alpha = .01
 
+
     plt.ion()
     fig = plt.figure()
     plt.show()
